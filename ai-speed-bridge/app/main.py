@@ -18,7 +18,9 @@ MODEL_CACHE_SECONDS = 600
 _non_chat_tokens = (
     "embed", "rerank", "safety", "guard", "translate", "transcribe",
     "speech", "asr", "tts", "ocr", "parse", "pose", "protein",
-    "image-generation", "image_gen", "video-generation",
+    "image-generation", "image_gen", "video-generation", "active-speaker",
+    "bevformer", "cosmos", "streampetr", "synthetic-video", "studiovoice",
+    "kumo-relational", "kumo-tabular", "ising-calibration", "nvidia/bnr",
 )
 
 @asynccontextmanager
@@ -48,6 +50,12 @@ def authorize(authorization: str | None):
     expected = f"Bearer {settings.bridge_api_key}"
     if not authorization or not hmac.compare_digest(authorization, expected):
         raise HTTPException(401, "Invalid bridge API key.")
+
+def _normalize_model_id(model_id: str) -> str:
+    # NGC slugs sometimes use hyphens where the OpenAI-compatible API uses
+    # version dots (e.g. glm-5-3-flash vs glm-5.3-flash).
+    return model_id.lower().replace("glm-5-3", "glm-5.3")
+
 
 def _catalog_model_ids(payload: dict) -> set[str]:
     ids = set()
@@ -132,7 +140,7 @@ async def _fetch_free_models():
             continue
         model_id = model["id"]
         lowered = model_id.lower()
-        if lowered not in catalog_ids:
+        if not any(_normalize_model_id(item) == _normalize_model_id(lowered) for item in catalog_ids):
             continue
         if any(token in lowered for token in _non_chat_tokens):
             continue
@@ -236,9 +244,9 @@ async def model_diagnostics(authorization: str | None = Header(default=None)):
         "catalog_free_endpoint_count": len(catalog_ids),
         "catalog_chat_candidate_count": len(chat_catalog),
         "nvidia_live_model_count": len(live_ids),
-        "intersection_count": len(chat_catalog & live_ids),
-        "catalog_chat_missing_from_live": sorted(chat_catalog - live_ids),
-        "live_missing_from_catalog": sorted(live_ids - catalog_ids),
+        "intersection_count": len({_normalize_model_id(x) for x in chat_catalog} & {_normalize_model_id(x) for x in live_ids}),
+        "catalog_chat_missing_from_live": sorted(x for x in chat_catalog if _normalize_model_id(x) not in {_normalize_model_id(y) for y in live_ids}),
+        "live_missing_from_catalog": sorted(x for x in live_ids if _normalize_model_id(x) not in {_normalize_model_id(y) for y in catalog_ids}),
     }
 
 
