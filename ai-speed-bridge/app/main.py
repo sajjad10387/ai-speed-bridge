@@ -70,7 +70,8 @@ async def chat_completions(request: Request, authorization: str | None = Header(
         raise HTTPException(400, "A model is required.")
     if model.startswith("nvidia/"):
         provider = "nvidia"
-        upstream_model = model[len("nvidia/"):]
+        # NVIDIA NIM expects the full model ID, including the "nvidia/" namespace.
+        upstream_model = model
     elif model.startswith("openrouter/"):
         provider = "openrouter"
         upstream_model = model[len("openrouter/"):]
