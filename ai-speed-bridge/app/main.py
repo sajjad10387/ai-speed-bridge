@@ -170,6 +170,78 @@ async def models(authorization: str | None = Header(default=None)):
         app.state.model_cache = {"expires": time.time() + MODEL_CACHE_SECONDS, "data": data}
         return {"object": "list", "data": data}
 
+@app.get("/v1/models/diagnostics")
+async def model_diagnostics(authorization: str | None = Header(default=None)):
+    authorize(authorization)
+    if not settings.nvidia_api_key:
+        raise HTTPException(503, "NVIDIA_API_KEY is not configured on the bridge.")
+
+    # Compare the authenticated upstream list against the NGC free-endpoint
+    # catalog without changing the public model list or request routing.
+    page_size = 200
+    catalog_ids: set[str] = set()
+    pages = 0
+    for page in range(20):
+        query = {
+            "query": "*",
+            "filters": [{"field": "label", "value": "nim_type_preview"}],
+            "orderBy": [{"field": "score", "value": "DESC"}],
+            "page": page,
+            "pageSize": page_size,
+            "scoredSize": page_size,
+        }
+        url = (
+            f"{NVIDIA_CATALOG_URL}?q={quote(json.dumps(query), safe='')}"
+            "&group-labels-by-labelset=true"
+        )
+        try:
+            response = await app.state.http.get(url, headers={"Accept": "application/json"})
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise HTTPException(502, f"Catalog diagnostics failed: {type(exc).__name__}")
+        page_ids = _catalog_model_ids(payload)
+        resource_count = sum(
+            len(group.get("resources", []))
+            for group in payload.get("results", [])
+            if isinstance(group, dict) and isinstance(group.get("resources", []), list)
+        )
+        pages += 1
+        new_ids = page_ids - catalog_ids
+        catalog_ids.update(page_ids)
+        if resource_count < page_size or not new_ids:
+            break
+
+    try:
+        response = await app.state.http.get(
+            f"{settings.nvidia_base_url.rstrip('/')}/models",
+            headers=upstream_headers("nvidia", settings.nvidia_api_key),
+        )
+        response.raise_for_status()
+        upstream = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(502, f"Upstream diagnostics failed: {type(exc).__name__}")
+
+    live_ids = {
+        model["id"].lower()
+        for model in upstream.get("data", [])
+        if isinstance(model, dict) and isinstance(model.get("id"), str)
+    }
+    chat_catalog = {
+        model for model in catalog_ids
+        if not any(token in model for token in _non_chat_tokens)
+    }
+    return {
+        "catalog_pages_scanned": pages,
+        "catalog_free_endpoint_count": len(catalog_ids),
+        "catalog_chat_candidate_count": len(chat_catalog),
+        "nvidia_live_model_count": len(live_ids),
+        "intersection_count": len(chat_catalog & live_ids),
+        "catalog_chat_missing_from_live": sorted(chat_catalog - live_ids),
+        "live_missing_from_catalog": sorted(live_ids - catalog_ids),
+    }
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request, authorization: str | None = Header(default=None)):
     authorize(authorization)
