@@ -77,7 +77,7 @@ async def _fetch_free_models():
 
     async def fetch_catalog_page(page: int) -> tuple[set[str], int]:
         query = {
-            "query": f'orgName:"{NVIDIA_NGC_ORG}"',
+            "query": "*",
             "filters": [{"field": "label", "value": "nim_type_preview"}],
             "orderBy": [{"field": "score", "value": "DESC"}],
             "page": page,
