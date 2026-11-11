@@ -69,43 +69,70 @@ def _catalog_model_ids(payload: dict) -> set[str]:
     return ids
 
 async def _fetch_free_models():
-    # NVIDIA's NGC catalog uses nim_type_preview for hosted preview endpoints.
-    # This includes free endpoints and free-plus-downloadable endpoints.
-    # Downloadable-only and partner-only entries are excluded.
-    query = {
-        "query": f'orgName:"{NVIDIA_NGC_ORG}"',
-        "filters": [{"field": "label", "value": "nim_type_preview"}],
-        "orderBy": [{"field": "score", "value": "DESC"}],
-        "page": 0,
-        "pageSize": 200,
-        "scoredSize": 200,
-    }
-    catalog_url = (
-        f"{NVIDIA_CATALOG_URL}?q={quote(json.dumps(query), safe='')}"
-        "&group-labels-by-labelset=true"
+    # Walk all NGC catalog pages; the live NVIDIA /models list remains the
+    # source of truth for models currently exposed to this API key.
+    page_size = 200
+    max_pages = 20
+    catalog_ids: set[str] = set()
+
+    async def fetch_catalog_page(page: int) -> tuple[set[str], int]:
+        query = {
+            "query": f'orgName:"{NVIDIA_NGC_ORG}"',
+            "filters": [{"field": "label", "value": "nim_type_preview"}],
+            "orderBy": [{"field": "score", "value": "DESC"}],
+            "page": page,
+            "pageSize": page_size,
+            "scoredSize": page_size,
+        }
+        catalog_url = (
+            f"{NVIDIA_CATALOG_URL}?q={quote(json.dumps(query), safe='')}"
+            "&group-labels-by-labelset=true"
+        )
+        response = await app.state.http.get(
+            catalog_url, headers={"Accept": "application/json"}
+        )
+        response.raise_for_status()
+        payload = response.json()
+        resource_count = sum(
+            len(group.get("resources", []))
+            for group in payload.get("results", [])
+            if isinstance(group, dict) and isinstance(group.get("resources", []), list)
+        )
+        return _catalog_model_ids(payload), resource_count
+
+    models_task = app.state.http.get(
+        f"{settings.nvidia_base_url.rstrip('/')}/models",
+        headers=upstream_headers("nvidia", settings.nvidia_api_key),
     )
-    catalog_response, models_response = await asyncio.gather(
-        app.state.http.get(catalog_url, headers={"Accept": "application/json"}),
-        app.state.http.get(
-            f"{settings.nvidia_base_url.rstrip('/')}/models",
-            headers=upstream_headers("nvidia", settings.nvidia_api_key),
-        ),
+    models_response, first_page = await asyncio.gather(
+        models_task, fetch_catalog_page(0)
     )
-    catalog_response.raise_for_status()
     models_response.raise_for_status()
-    catalog = catalog_response.json()
-    upstream = models_response.json()
-    free_ids = _catalog_model_ids(catalog)
-    if not free_ids:
+
+    page_ids, resource_count = first_page
+    catalog_ids.update(page_ids)
+
+    # Continue until a short/empty page, a repeated page, or a safety cap.
+    for page in range(1, max_pages):
+        if resource_count < page_size:
+            break
+        page_ids, resource_count = await fetch_catalog_page(page)
+        new_ids = page_ids - catalog_ids
+        if not new_ids:
+            break
+        catalog_ids.update(new_ids)
+
+    if not catalog_ids:
         raise ValueError("NVIDIA free-endpoint catalog returned no model IDs.")
 
+    upstream = models_response.json()
     available = []
     for model in upstream.get("data", []):
         if not isinstance(model, dict) or not isinstance(model.get("id"), str):
             continue
         model_id = model["id"]
         lowered = model_id.lower()
-        if lowered not in free_ids:
+        if lowered not in catalog_ids:
             continue
         if any(token in lowered for token in _non_chat_tokens):
             continue
