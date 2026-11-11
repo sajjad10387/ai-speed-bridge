@@ -3,6 +3,8 @@ services:
     name: personal-ai-speed-bridge
     runtime: python
     plan: free
+    region: singapore
+    rootDir: ai-speed-bridge
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
