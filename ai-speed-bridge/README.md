@@ -11,6 +11,8 @@ A lightweight OpenAI-compatible streaming proxy intended for a personal VS Code 
 - Reuses async HTTP connections and enables HTTP/2.
 - Protects the bridge with a separate `BRIDGE_API_KEY`.
 - Exposes `/health` for uptime monitoring.
+- Dynamically discovers NVIDIA models marked `Free Endpoint`, including models also marked `Downloadable`; excludes downloadable-only and partner-only models.
+- Intersects NVIDIA's free-endpoint catalog with the live `/v1/models` API and caches the result for 10 minutes.
 
 ## Important compatibility note
 
@@ -30,9 +32,13 @@ It does not make NVIDIA/OpenRouter model inference faster. It can reduce avoidab
 5. Configure UptimeRobot to monitor `https://YOUR-SERVICE.onrender.com/health` every 5 minutes if permitted by Render's current free-tier terms. Do not assume this guarantees 24/7 uptime.
 
 
+## Model discovery
+
+`GET /v1/models` requires the bridge bearer key. It dynamically returns NVIDIA models that have the NGC `nim_type_preview` label (Free Endpoint), intersected with NVIDIA's live model API. This includes **Free Endpoint** and **Free Endpoint + Downloadable**, but excludes **Downloadable only** and partner-only entries. Results are cached for 10 minutes. If NVIDIA's catalog cannot be refreshed, the bridge returns an error rather than accidentally exposing unfiltered models.
+
 ## Connect VS Code Copilot Chat (Custom Endpoint)
 
-In VS Code, open **Chat: Manage Language Models** → **Add Models** → **Custom Endpoint**. Choose **Chat Completions**. The configuration below is an example; replace the model ID with a model actually enabled for your NVIDIA NIM account.
+In VS Code, open **Chat: Manage Language Models** → **Add Models** → **Custom Endpoint**. Choose **Chat Completions**. The custom endpoint UI in some VS Code versions requires model entries to be declared manually; it may not automatically populate its picker from `/v1/models`. Other OpenAI-compatible clients that support model discovery can fetch the dynamic list automatically.
 
 Add an entry like this to `chatLanguageModels.json` (use the bridge URL and keep the bridge key in VS Code's input secret prompt):
 
