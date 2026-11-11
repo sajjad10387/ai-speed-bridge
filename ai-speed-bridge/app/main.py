@@ -71,10 +71,10 @@ def _catalog_model_ids(payload: dict) -> set[str]:
 async def _fetch_free_models():
     # NVIDIA's NGC catalog uses nim_type_preview for hosted preview endpoints.
     # This includes both "Free Endpoint" and "Free Endpoint + Downloadable";
-    # downloadable-only and partner-only entries are not included.
+    # downloadable-only and partner-only entries are not included. The additional\n    # coding label limits discovery to NVIDIA catalog models explicitly tagged for coding.
     query = {
         "query": f'orgName:"{NVIDIA_NGC_ORG}"',
-        "filters": [{"field": "label", "value": "nim_type_preview"}],
+        "filters": [\n            {"field": "label", "value": "nim_type_preview"},\n            {"field": "label", "value": "coding"},\n        ],
         "orderBy": [{"field": "score", "value": "DESC"}],
         "page": 0,
         "pageSize": 200,
